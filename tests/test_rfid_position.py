@@ -55,6 +55,18 @@ class RFIDPositionTests(unittest.TestCase):
         self.assertEqual(robot.pose_updates, [])
         self.assertEqual(robot.stops, 1)
 
+    def test_failed_pose_update_does_not_publish_a_successful_offset(self):
+        class FailingPoseRobot(SimulatedRobot):
+            def set_pose(self, x, y, heading):
+                raise RuntimeError('pose adapter unavailable')
+
+        robot = FailingPoseRobot()
+        position = self.make_position(robot)
+        with self.assertRaises(RuntimeError):
+            position.center_on_card()
+        self.assertIsNone(position.card_offset())
+        self.assertEqual(robot.stops, 1)
+
     def test_edge_limit_fails_closed(self):
         robot = SimulatedRobot()
         with self.assertRaises(CenteringError):

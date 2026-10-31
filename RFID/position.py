@@ -118,10 +118,10 @@ class RFIDPosition:
             # Recheck lateral centering at the longitudinal midpoint.
             gain_difference = self._lateral(uid)
             square, x, y = self.tiles[uid]
-            self._last_offset = {'forward_mm_from_scan_start': midpoint,
-                                 'gain_difference': gain_difference}
             _, _, heading = self.motion.get_pose()
             self.motion.set_pose(x, y, heading)
+            self._last_offset = {'forward_mm_from_scan_start': midpoint,
+                                 'gain_difference': gain_difference}
             return square
         finally:
             self.motion.stop()

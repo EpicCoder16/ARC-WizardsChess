@@ -24,7 +24,9 @@ can call `send_status("battery_low", battery_pct=18)`.
 
 All datagrams are limited to 512 bytes. The Pico ignores commands that do not
 come from the configured laptop IP. Supply the Wi-Fi password at runtime; the
-module contains no network credentials.
+module contains no network credentials. Robot IDs are limited to 64
+characters, command IDs to 128 characters, and only protocol version 1 hello
+messages are registered by the laptop.
 
 ## Pico interface
 

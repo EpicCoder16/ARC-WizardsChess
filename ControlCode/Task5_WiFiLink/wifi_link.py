@@ -11,6 +11,8 @@ except ImportError:
 
 STATUSES = ("arrived", "moving", "lost", "battery_low")
 MAX_DATAGRAM_BYTES = 512
+MAX_ROBOT_ID_CHARS = 64
+MAX_COMMAND_ID_CHARS = 128
 RECENT_COMMAND_LIMIT = 16
 
 
@@ -46,14 +48,21 @@ def _valid_tile(tile):
             and "a" <= tile[0] <= "h" and "1" <= tile[1] <= "8")
 
 
+def _valid_battery_pct(value):
+    return (isinstance(value, (int, float)) and not isinstance(value, bool)
+            and 0 <= value <= 100)
+
+
 class WifiLink:
     """Pico endpoint. on_goto(tile) must finish the move and return False on failure."""
 
     def __init__(self, ssid, password, robot_id, laptop_ip, port=12345,
                  on_goto=None, local_port=None, announce_interval_ms=2000,
                  socket_module=socket, network_module=network):
-        if not isinstance(robot_id, str) or not robot_id:
-            raise ValueError("robot_id must be a non-empty string")
+        if (not isinstance(robot_id, str) or not robot_id
+                or len(robot_id) > MAX_ROBOT_ID_CHARS):
+            raise ValueError("robot_id must contain 1 to {} characters".format(
+                MAX_ROBOT_ID_CHARS))
         if not isinstance(laptop_ip, str) or not laptop_ip:
             raise ValueError("laptop_ip must be a non-empty IPv4 address")
         if not isinstance(port, int) or not 1 <= port <= 65535:
@@ -131,10 +140,18 @@ class WifiLink:
                     battery_pct=None):
         if status not in STATUSES:
             raise ValueError("status must be one of {}".format(", ".join(STATUSES)))
+        if (command_id is not None
+                and (not isinstance(command_id, str) or not command_id
+                     or len(command_id) > MAX_COMMAND_ID_CHARS)):
+            raise ValueError("command_id must contain 1 to {} characters".format(
+                MAX_COMMAND_ID_CHARS))
+        if tile is not None and not _valid_tile(tile):
+            raise ValueError("tile must be a square such as 'f3'")
+        if battery_pct is not None and not _valid_battery_pct(battery_pct):
+            raise ValueError("battery_pct must be a number from 0 to 100")
         message = {"type": "status", "robot_id": self.robot_id, "status": status}
         if command_id is not None:
             message["command_id"] = command_id
-            self._remember_status(command_id, status)
         if tile is not None:
             message["tile"] = tile
         if detail is not None:
@@ -142,6 +159,8 @@ class WifiLink:
         if battery_pct is not None:
             message["battery_pct"] = battery_pct
         self._send(message)
+        if command_id is not None:
+            self._remember_status(command_id, status)
 
     def _handle_command(self, payload):
         try:
@@ -151,13 +170,15 @@ class WifiLink:
         if not isinstance(message, dict):
             return False
         target_id = message.get("robot_id")
-        if target_id is not None and target_id != self.robot_id:
+        if target_id != self.robot_id:
             return False
         if message.get("cmd") != "goto":
             return False
 
         command_id = message.get("command_id")
-        if command_id is not None and not isinstance(command_id, (str, int)):
+        if (command_id is not None
+                and (not isinstance(command_id, str) or not command_id
+                     or len(command_id) > MAX_COMMAND_ID_CHARS)):
             return False
         tile = message.get("tile")
         if not _valid_tile(tile):
@@ -194,11 +215,15 @@ class WifiLink:
             raise RuntimeError("Call connect() before polling")
         self._announce()
         try:
-            payload, address = self.sock.recvfrom(MAX_DATAGRAM_BYTES)
+            # Read one byte beyond the limit so oversized UDP packets cannot be
+            # accepted after recvfrom silently truncates a valid JSON prefix.
+            payload, address = self.sock.recvfrom(MAX_DATAGRAM_BYTES + 1)
         except OSError as error:
             if _would_block(error):
                 return False
             raise
+        if len(payload) > MAX_DATAGRAM_BYTES:
+            return False
         if address[0] != self.laptop_ip:
             return False
         return self._handle_command(payload)

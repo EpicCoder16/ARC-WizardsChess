@@ -4,6 +4,7 @@ import socket
 
 STATUSES = ("arrived", "moving", "lost", "battery_low")
 MAX_DATAGRAM_BYTES = 512
+MAX_ROBOT_ID_CHARS = 64
 
 
 def _valid_tile(tile):
@@ -35,8 +36,10 @@ class LaptopLink:
         """Receive one datagram; return its message or None on timeout/invalid data."""
         self.sock.settimeout(timeout)
         try:
-            payload, address = self.sock.recvfrom(MAX_DATAGRAM_BYTES)
+            payload, address = self.sock.recvfrom(MAX_DATAGRAM_BYTES + 1)
         except socket.timeout:
+            return None
+        if len(payload) > MAX_DATAGRAM_BYTES:
             return None
         try:
             message = json.loads(payload.decode("utf-8"))
@@ -46,9 +49,12 @@ class LaptopLink:
             return None
 
         robot_id = message.get("robot_id")
-        if not isinstance(robot_id, str) or not robot_id:
+        if (not isinstance(robot_id, str) or not robot_id
+                or len(robot_id) > MAX_ROBOT_ID_CHARS):
             return None
         if message.get("type") == "hello":
+            if message.get("protocol") != 1:
+                return None
             self.devices[robot_id] = address
             self._send({"type": "registered", "robot_id": robot_id, "protocol": 1},
                        address)
@@ -66,6 +72,10 @@ class LaptopLink:
 
     def send_goto(self, robot_id, tile):
         """Send goto to a registered robot and return the command ID."""
+        if (not isinstance(robot_id, str) or not robot_id
+                or len(robot_id) > MAX_ROBOT_ID_CHARS):
+            raise ValueError("robot_id must contain 1 to {} characters".format(
+                MAX_ROBOT_ID_CHARS))
         if not _valid_tile(tile):
             raise ValueError("tile must be a square such as 'f3'")
         if robot_id not in self.devices:

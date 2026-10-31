@@ -7,6 +7,12 @@ from machine import Pin, SPI
 import time
 
 GAINS = ((0, 18), (1, 23), (4, 33), (5, 38), (6, 43), (7, 48))
+SPI_BUS = 0
+SPI_BAUDRATE = 1_000_000
+SPI_PINS = (18, 19, 16)  # SCK, MOSI, MISO
+LEFT_CS_PIN = 20
+RIGHT_CS_PIN = 17
+RESET_PIN = 22
 
 
 class Reader:
@@ -92,11 +98,12 @@ class PicoReaders:
         if not callable(read_uid):
             raise ValueError('a UID-reading callback is required')
         self.read_uid = read_uid
-        self.spi = SPI(0, baudrate=1000000, polarity=0, phase=0,
-                       sck=Pin(18), mosi=Pin(19), miso=Pin(16))
-        self.reset = Pin(22, Pin.OUT, value=1)
-        self.left = Reader(self.spi, 20)
-        self.right = Reader(self.spi, 17)
+        self.spi = SPI(SPI_BUS, baudrate=SPI_BAUDRATE, polarity=0, phase=0,
+                       sck=Pin(SPI_PINS[0]), mosi=Pin(SPI_PINS[1]),
+                       miso=Pin(SPI_PINS[2]))
+        self.reset = Pin(RESET_PIN, Pin.OUT, value=1)
+        self.left = Reader(self.spi, LEFT_CS_PIN)
+        self.right = Reader(self.spi, RIGHT_CS_PIN)
         self.reset.value(0)
         time.sleep_ms(10)
         self.reset.value(1)
