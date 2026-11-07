@@ -58,7 +58,7 @@ class WifiLink:
 
     def __init__(self, ssid, password, robot_id, laptop_ip, port=12345,
                  on_goto=None, local_port=None, announce_interval_ms=2000,
-                 socket_module=socket, network_module=network):
+                 socket_module=socket, network_module=network, mode="robot"):
         if (not isinstance(robot_id, str) or not robot_id
                 or len(robot_id) > MAX_ROBOT_ID_CHARS):
             raise ValueError("robot_id must contain 1 to {} characters".format(
@@ -73,6 +73,8 @@ class WifiLink:
             raise ValueError("local_port must be between 0 and 65535")
         if announce_interval_ms <= 0:
             raise ValueError("announce_interval_ms must be positive")
+        if mode not in ("robot", "bench"):
+            raise ValueError("mode must be robot or bench")
 
         self.ssid = ssid
         self.password = password
@@ -81,6 +83,7 @@ class WifiLink:
         self.port = port
         self.local_port = local_port
         self.on_goto = on_goto
+        self.mode = mode
         self.announce_interval_ms = announce_interval_ms
         self.socket_module = socket_module
         self.network_module = network_module
@@ -123,15 +126,18 @@ class WifiLink:
         now = _now_ms()
         if (force or self._last_announce_ms is None
                 or _elapsed_ms(self._last_announce_ms) >= self.announce_interval_ms):
-            self._send({"type": "hello", "robot_id": self.robot_id, "protocol": 1})
+            message = {"type": "hello", "robot_id": self.robot_id, "protocol": 1}
+            if self.mode == "bench":
+                message["mode"] = "bench"
+            self._send(message)
             self._last_announce_ms = now
 
-    def _remember_status(self, command_id, status):
+    def _remember_status(self, command_id, message):
         if command_id is None:
             return
         if command_id not in self._command_status:
             self._recent_command_ids.append(command_id)
-        self._command_status[command_id] = status
+        self._command_status[command_id] = message
         while len(self._recent_command_ids) > RECENT_COMMAND_LIMIT:
             expired = self._recent_command_ids.pop(0)
             self._command_status.pop(expired, None)
@@ -158,9 +164,13 @@ class WifiLink:
             message["detail"] = str(detail)[:120]
         if battery_pct is not None:
             message["battery_pct"] = battery_pct
+        if self.mode == "bench":
+            message["mode"] = "bench"
+        # Save the completed result before sending: loss of the reply must not
+        # repeat a completed move. Cache the whole response, including errors.
+        if command_id is not None and status in ("arrived", "lost"):
+            self._remember_status(command_id, message)
         self._send(message)
-        if command_id is not None:
-            self._remember_status(command_id, status)
 
     def _handle_command(self, payload):
         try:
@@ -181,15 +191,17 @@ class WifiLink:
                      or len(command_id) > MAX_COMMAND_ID_CHARS)):
             return False
         tile = message.get("tile")
+        # A retried UDP packet must not make the robot repeat the same recent move.
+        if command_id is not None and command_id in self._command_status:
+            previous = self._command_status[command_id]
+            if previous.get("tile") != tile:
+                return False  # An ID identifies one immutable command.
+            self._send(previous)
+            return True
+
         if not _valid_tile(tile):
             self.send_status("lost", command_id=command_id, detail="invalid_tile")
             return False
-
-        # A retried UDP packet must not make the robot repeat the same recent move.
-        if command_id is not None and command_id in self._command_status:
-            self.send_status(self._command_status[command_id],
-                             command_id=command_id, tile=tile)
-            return True
 
         self.send_status("moving", command_id=command_id, tile=tile)
         if self.on_goto is None:
@@ -213,6 +225,8 @@ class WifiLink:
         """Handle at most one datagram; returns True when a goto is processed."""
         if self.sock is None:
             raise RuntimeError("Call connect() before polling")
+        if self.wlan is not None and not self.wlan.isconnected():
+            raise OSError("Wi-Fi disconnected")
         self._announce()
         try:
             # Read one byte beyond the limit so oversized UDP packets cannot be

@@ -1,9 +1,22 @@
 # Task 1, 4, and 5 integration notes
 
-This branch combines the current Task 1 motor driver, Task 4 RFID prototype,
+This repository combines the current Task 1 motor driver, Task 4 RFID prototype,
 and Task 5 JSON/UDP link. The current GitHub repo has no Task 2 or Task 3
 branch, so this is a software integration checkpoint, not a complete robot
 motion stack.
+
+## Current checkpoint: ready for a Wi-Fi bench test
+
+The Task 5 folder now includes a Pico `main.py`, private local configuration
+template, LED-only bench callback, and a laptop command with timeouts and UDP
+retries. Follow [the upload and test guide](ControlCode/Task5_WiFiLink/README.md).
+This path runs independently of Tasks 2/3 and RFID. All bench announcements and
+statuses include `mode: bench`; `arrived` is a simulated callback result.
+
+PID and Kiwi kinematics are deferred for this checkpoint. The missing interfaces
+below remain blockers for physical robot motion, but do not block testing the
+Wi-Fi command/status link on a Pico. Consolidation in `main` does not establish
+hardware validation or completion of all five tasks.
 
 ## Interfaces and dependencies
 

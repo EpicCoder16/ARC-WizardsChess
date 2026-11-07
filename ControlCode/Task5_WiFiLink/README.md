@@ -4,6 +4,75 @@ This module connects a Pico 2 W to the laptop over the same Wi-Fi network. It
 uses short JSON UDP messages and replaces the older ESP-01 binary link for this
 Pico 2 W path.
 
+## Start here: Wi-Fi bench test (no motion software required)
+
+This is the current runnable test path. It does not import the motor driver,
+PID, Kiwi maths, or RFID code. On `goto`, it prints the target square and
+lights the onboard LED for 0.25 seconds. Every announcement and status carries
+`"mode":"bench"`. An `arrived` response in this mode is simulated and proves
+only that the command/status exchange completed.
+
+### Upload with Thonny
+
+1. Use a **Raspberry Pi Pico 2 W** with the matching stable
+   [MicroPython firmware](https://micropython.org/download/RPI_PICO2_W/).
+   If firmware is needed, hold BOOTSEL while connecting USB, then copy the
+   board's UF2 file onto the drive that appears. Select the Pico MicroPython
+   interpreter and its USB port in Thonny.
+2. Connect the laptop and Pico to the same 2.4 GHz hotspot. The handoff suggests
+   a phone hotspot because campus Wi-Fi may block traffic between devices.
+   Find the laptop's IPv4 address for that hotspot in its network settings.
+3. Copy `wifi_config.example.py` locally to `wifi_config.py`. Fill in `SSID`,
+   `PASSWORD`, `LAPTOP_IP`, and a unique `ROBOT_ID`. Leave `BENCH_RESULT` as
+   `"success"`. The local credential file is ignored by Git.
+4. In Thonny, save **these four files to the Pico's root**, keeping their names:
+   `main.py`, `bench.py`, `wifi_link.py`, and your `wifi_config.py`.
+   The example config and laptop files do not need to be uploaded. Do not copy
+   the motor test scripts into `main.py`; this bench entry point controls only
+   the onboard LED. Keep motor power disconnected during this test.
+5. Run `main.py` or reboot. Thonny should show `Wi-Fi BENCH mode` and `Pico IP:`.
+   It retries network connection errors every three seconds. Use Ctrl+C in the
+   Thonny shell to stop the program and edit configuration.
+
+### Run on the laptop
+
+From the repository root, using Python 3 (no extra packages required):
+
+```sh
+python3 ControlCode/Task5_WiFiLink/laptop_test.py --robot-id white-king --tile f3
+```
+
+The command waits up to 15 seconds for registration, sends `goto`, prints
+statuses, and exits successfully after `arrived`. Expect the Pico LED to flash,
+`moving` then `arrived` with `mode: bench`, and `PASS` on the laptop. It retries
+using the same command ID if a response is dropped; the cached result avoids
+running the callback again. Use `--timeout 30` if more discovery time is needed.
+
+For failure tests, change the Pico config to `BENCH_RESULT = "failure"` and
+restart it, then run:
+
+```sh
+python3 ControlCode/Task5_WiFiLink/laptop_test.py --robot-id white-king --tile f3 --expect lost
+```
+
+Repeat with `BENCH_RESULT = "error"`; expect `lost` with
+`bench_simulated_error`. Restore `success` afterward. These tests need no PID
+or Kiwi maths. `battery_low` has a send API, but no battery sensor is sampled
+by this bench firmware. RFID UID/tile-crossing telemetry is not connected yet.
+
+If registration times out, check the configured laptop IPv4 address, hotspot
+client isolation, and permission for Python to receive UDP through the laptop
+firewall. Stop the old `PathPlanning/PythonServer.py`: it also uses UDP 12345
+and speaks a different protocol. If changing ports with `--port`, change `PORT`
+on the Pico to match. Give each Pico a unique ID. After a hotspot IP change,
+update `LAPTOP_IP` and restart the Pico.
+
+The bench runner reconnects after Wi-Fi errors, keeping its in-memory completed
+command cache. The cache holds only the latest 16 commands and is lost on Pico
+reset; this is not persistent exactly-once delivery. Do not use the bench
+runner to control motors. Real motion requires a separate startup entry point
+with Task 3's completed movement callback and the hardware checks below.
+
 ## Protocol
 
 The Pico announces itself every few seconds:
@@ -28,7 +97,15 @@ module contains no network credentials. Robot IDs are limited to 64
 characters, command IDs to 128 characters, and only protocol version 1 hello
 messages are registered by the laptop.
 
-## Pico interface
+The laptop generates random command IDs so restarting it does not reuse the
+Pico's recent command IDs. Passing an existing ID to `send_goto` retries that
+same command. Reusing it with a different square is ignored. Terminal replies
+are cached with their error details before transmission, so a failed send can
+be recovered by retrying. UDP messages are not encrypted or authenticated;
+use a trusted test network. The configured source IP and robot ID filter
+misaddressed traffic but do not authenticate a sender.
+
+## Pico interface for future real movement
 
 Copy `wifi_link.py` to the Pico 2 W. Pass Task 3's blocking movement adapter
 as `on_goto`. The callback receives algebraic notation such as `"f3"`; it

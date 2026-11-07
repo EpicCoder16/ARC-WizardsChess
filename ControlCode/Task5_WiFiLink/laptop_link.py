@@ -1,6 +1,7 @@
 """Laptop-side UDP partner for the Pico Task 5 Wi-Fi link."""
 import json
 import socket
+import uuid
 
 STATUSES = ("arrived", "moving", "lost", "battery_low")
 MAX_DATAGRAM_BYTES = 512
@@ -22,7 +23,6 @@ class LaptopLink:
         self.on_status = on_status
         self.devices = {}
         self.latest_status = {}
-        self._command_counter = 0
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.bind((host, port))
 
@@ -65,12 +65,23 @@ class LaptopLink:
             return None
         if message.get("status") not in STATUSES:
             return None
+        command_id = message.get("command_id")
+        if command_id is not None and (not isinstance(command_id, str)
+                                      or not 1 <= len(command_id) <= 128):
+            return None
+        if "tile" in message and not _valid_tile(message["tile"]):
+            return None
+        battery = message.get("battery_pct")
+        if battery is not None and (not isinstance(battery, (int, float))
+                                   or isinstance(battery, bool)
+                                   or not 0 <= battery <= 100):
+            return None
         self.latest_status[robot_id] = message
         if self.on_status is not None:
             self.on_status(message)
         return message
 
-    def send_goto(self, robot_id, tile):
+    def send_goto(self, robot_id, tile, command_id=None):
         """Send goto to a registered robot and return the command ID."""
         if (not isinstance(robot_id, str) or not robot_id
                 or len(robot_id) > MAX_ROBOT_ID_CHARS):
@@ -80,8 +91,10 @@ class LaptopLink:
             raise ValueError("tile must be a square such as 'f3'")
         if robot_id not in self.devices:
             raise KeyError("robot {!r} has not announced itself".format(robot_id))
-        self._command_counter += 1
-        command_id = "{}-{}".format(robot_id, self._command_counter)
+        if command_id is None:
+            command_id = uuid.uuid4().hex
+        if not isinstance(command_id, str) or not 1 <= len(command_id) <= 128:
+            raise ValueError("command_id must contain 1 to 128 characters")
         self._send({
             "robot_id": robot_id,
             "cmd": "goto",

@@ -2,10 +2,14 @@
 import json
 import socket
 import time
+import threading
 import unittest
+from unittest.mock import patch
 
 from ControlCode.Task5_WiFiLink.laptop_link import LaptopLink
 from ControlCode.Task5_WiFiLink.wifi_link import MAX_DATAGRAM_BYTES, WifiLink
+from ControlCode.Task5_WiFiLink.bench import BenchMotion
+from ControlCode.Task5_WiFiLink.laptop_test import check_command
 
 
 class _ConnectedWLAN:
@@ -251,6 +255,112 @@ class WifiLoopbackTests(unittest.TestCase):
             self.pico.send_status("arrived", command_id="x" * 129)
         with self.assertRaises(ValueError):
             self.laptop.send_goto("x" * 65, "f3")
+
+    def test_failed_terminal_send_keeps_result_and_error_for_retry(self):
+        self.pico.on_goto = lambda tile: False
+        command_id = self.laptop.send_goto(self.robot_id, "f3")
+        original_send = self.pico._send
+
+        def fail_terminal(message):
+            if message.get("status") == "lost":
+                raise OSError("simulated lost terminal send")
+            original_send(message)
+
+        self.pico._send = fail_terminal
+        with self.assertRaises(OSError):
+            self._poll_command(command_id)
+        self.pico._send = original_send
+        self._receive_status()  # moving
+        self.pico.on_goto = lambda tile: self.fail("retry repeated the callback")
+        self.laptop.send_goto(self.robot_id, "f3", command_id=command_id)
+        self.assertTrue(self._poll_until_handled())
+        result = self._receive_status()
+        self.assertEqual(result["status"], "lost")
+        self.assertEqual(result["detail"], "motion_handler_failed")
+
+    def test_reusing_command_id_for_another_tile_is_ignored(self):
+        command_id = self.laptop.send_goto(self.robot_id, "f3")
+        self._poll_command(command_id)
+        self._receive_status()
+        self._receive_status()
+        self.laptop.send_goto(self.robot_id, "h8", command_id=command_id)
+        self._send_json_to_pico({"robot_id": self.robot_id, "cmd": "goto",
+                                 "tile": "i9", "command_id": command_id})
+        for _ in range(10):
+            self.pico.poll()
+        self.assertEqual(self.moves, ["f3"])
+        self.assertEqual(self.pico._command_status[command_id]["status"], "arrived")
+        self.assertEqual(self.pico._command_status[command_id]["tile"], "f3")
+        self.assertIsNone(self._receive_status(timeout=0.02))
+
+    def test_laptop_restart_uses_new_command_id(self):
+        first = self.laptop.send_goto(self.robot_id, "f3")
+        self._poll_command(first)
+        self._receive_status()
+        self._receive_status()
+        self.laptop.close()
+        self.laptop = LaptopLink(host="127.0.0.1", port=self.port)
+        self.pico._announce(force=True)
+        self.laptop.receive_once(timeout=1)
+        self.pico.poll()  # registration response
+        second = self.laptop.send_goto(self.robot_id, "h8")
+        self.assertNotEqual(first, second)
+        self._poll_command(second)
+        self.assertEqual(self.moves, ["f3", "h8"])
+
+    def test_laptop_cli_retries_lost_reply_and_marks_bench_result(self):
+        self.pico.mode = "bench"
+        original_send = self.pico._send
+        dropped = []
+
+        def drop_first_arrived(message):
+            if message.get("status") == "arrived" and not dropped:
+                dropped.append(message)
+                return
+            original_send(message)
+
+        self.pico._send = drop_first_arrived
+        stopped = threading.Event()
+        errors = []
+
+        def poll_pico():
+            try:
+                while not stopped.is_set():
+                    self.pico.poll()
+                    time.sleep(0.001)
+            except Exception as error:
+                errors.append(error)
+
+        worker = threading.Thread(target=poll_pico)
+        worker.start()
+        try:
+            result = check_command(self.laptop, self.robot_id, "f3",
+                                   timeout=2, retry_interval=0.02)
+            self.assertEqual(result["mode"], "bench")
+            self.assertEqual(self.moves, ["f3"])
+            self.assertEqual(len(dropped), 1)
+        finally:
+            stopped.set()
+            worker.join(timeout=2)
+        self.assertEqual(errors, [])
+
+    def test_bench_callback_success_failure_error_and_led_cleanup(self):
+        class LED:
+            def value(self, level):
+                self.level = level
+
+        led = LED()
+        with patch("ControlCode.Task5_WiFiLink.bench.time.sleep"):
+            self.assertTrue(BenchMotion("success", led)("f3"))
+            self.assertEqual(led.level, 0)
+            self.assertFalse(BenchMotion("failure", led)("f3"))
+            with self.assertRaisesRegex(RuntimeError, "bench_simulated_error"):
+                BenchMotion("error", led)("f3")
+            self.assertEqual(led.level, 0)
+
+    def test_cli_discovery_timeout_is_bounded(self):
+        with self.assertRaises(TimeoutError):
+            check_command(self.laptop, "absent-robot", "f3", timeout=0.02)
 
 
 if __name__ == "__main__":
