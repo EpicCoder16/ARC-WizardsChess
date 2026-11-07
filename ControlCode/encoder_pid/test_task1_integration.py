@@ -1,7 +1,6 @@
 
 import sys
 import types
-import subprocess
 from pathlib import Path
 
 from speed_control import WheelSpeedControl
@@ -43,16 +42,14 @@ sys.modules["machine"] = fake_machine
 
 
 # Read the real Task 1 code from its Git branch
+# Read Task 1's motor driver from the repository
 repo = Path(__file__).resolve().parents[2]
 
-source = subprocess.check_output(
-    [
-        "git", "show",
-        "task1-motor-driver:ControlCode/motor_driver/motor_driver.py"
-    ],
-    cwd=repo,
-    text=True
+motor_driver_path = (
+    repo / "ControlCode" / "motor_driver" / "motor_driver.py"
 )
+
+source = motor_driver_path.read_text()
 
 motor_driver = types.ModuleType("motor_driver")
 exec(compile(source, "motor_driver.py", "exec"),

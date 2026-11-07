@@ -91,8 +91,11 @@ python3 ControlCode/encoder_pid/pico_speed_adapter.py
 
 python3 ControlCode/encoder_pid/test_task1_integration.py
 
-The Task 1 integration test requires the local
-task1-motor-driver Git branch.
+The Task 1 integration test loads the motor driver
+directly from ControlCode/motor_driver/motor_driver.py.
+
+Task 1 has been merged into main, so no separate
+Task 1 Git branch is required.
 
 To regenerate the graph, run plot_speed.py using
 a Python environment with matplotlib installed.
