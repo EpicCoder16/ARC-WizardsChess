@@ -82,3 +82,18 @@ The critical missing piece is the "Feedback Loop." Currently, the code assumes t
     - The Problem: Currently, the game relies on two humans entering moves or speaking them.
 
     - The Fix: The Readme lists playing against a chess engine as a "To Do". You need to integrate a library like Stockfish into game.py so the computer can generate its own moves instead of waiting for a second player.
+
+## New Pico 2 W task modules
+
+The current task branches add a MicroPython motor driver, an RFID positioning
+prototype, and a direct JSON/UDP Wi-Fi link. They are not yet connected to the
+existing Arduino/ESP-01 byte-command path. See
+[`TASK_BRANCH_INTEGRATION.md`](TASK_BRANCH_INTEGRATION.md) for interfaces,
+missing Task 2/3 adapters, pin conflicts with legacy sketches, and testing and
+hardware limits.
+
+For the current Wi-Fi bench test, start with the
+[Pico upload and laptop test guide](ControlCode/Task5_WiFiLink/README.md).
+It includes a Pico `main.py` and a laptop test command. No PID, Kiwi maths,
+motor control, or RFID connection is needed for this test; `arrived` is
+explicitly marked as simulated in bench mode.

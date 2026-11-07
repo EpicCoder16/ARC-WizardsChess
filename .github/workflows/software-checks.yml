@@ -1,0 +1,21 @@
+name: Software checks
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  offline-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Motor driver simulator
+        run: python3 ControlCode/motor_driver/simulate_motor_driver.py
+      - name: RFID, Wi-Fi protocol, and hardware pin map simulations
+        run: python3 -m unittest discover -s tests -v
