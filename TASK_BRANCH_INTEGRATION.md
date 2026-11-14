@@ -1,3 +1,9 @@
+> Task 4b update: `RFID.uid.read_uid` now provides built-in 4/7/10-byte
+> UID selection; `PicoReaders()` uses it by default and exposes fixed-gain
+> `read_pair_fast()`. `RFID/bench_uid.py` logs UID/gain/latency observations.
+> Software tests pass; physical reader accuracy, gain ordering and timing
+> remain unverified. The original baseline notes below predate these additions.
+
 > Task 3 update: kiwi kinematics/odometry, heading hold, translation ramps,
 > Task 2 scheduling/stop adapter, RFID-confirmed route callback and a physical
 > acceptance runner are now in `ControlCode/kiwi_drive`. See that README for

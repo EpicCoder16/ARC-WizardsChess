@@ -1,6 +1,6 @@
 # Task 4: RFID positioning and centering
 
-This is a prototype for the Pico 2 W described in the handoff. `pico_readers.py` adapts the separately supplied `two_reader_test.py` pin configuration, alternating antenna scans, and minimum-gain measurement. That test detects a card but does not read its UID. The EpicCoder16 repository does not contain Task 3's motion API. **UID acquisition and motion integration are still required; this module has not been tested on a robot.** Do not operate motors until the adapters and limits have been reviewed and tested on the actual robot.
+This is a prototype for the Pico 2 W described in the handoff. `pico_readers.py` adapts the separately supplied `two_reader_test.py` pin configuration, alternating antenna scans, and minimum-gain measurement. Task 4b now supplies ISO14443-A UID selection in `uid.py`, used by default by `PicoReaders()`. Task 3's motion API and integration adapters are on main. **Physical reader validation and robot runtime integration are still required; this module has not been tested on a robot.** Do not operate motors until the adapters and limits have been reviewed and tested on the actual robot.
 
 ## Interfaces
 
@@ -15,7 +15,7 @@ Create `RFIDPosition(readers, motion, tiles, ...)`. A tile map associates normal
 
 ## Adapter contract
 
-* `readers.read_pair()` returns `(left, right)`, each either `None` or `(uid, minimum_gain)`; UID is bytes or a hex string and gain is a comparable number. `PicoReaders(read_uid)` implements the supplied gain scan and requires a `read_uid(reader)` callback that performs RC522 anticollision/selection and returns a UID or `None`. The callback must operate only the reader passed to it and turn its antenna off even on failure. `PicoReaders` switches both antennas off between samples and on exit, and refuses to invent a UID if acquisition fails. Verify the card is still in place across gain and UID reads. Confirm that a lower reported value actually means closer; raw register encodings may differ.
+* `readers.read_pair()` returns `(left, right)`, each either `None` or `(uid, minimum_gain)`; UID is bytes or a hex string and gain is a comparable number. `PicoReaders()` implements the gain scan and uses the built-in `read_uid(reader)`; an optional `PicoReaders(custom_read_uid)` callback can override it. The callback must operate only the reader passed to it and turn its antenna off even on failure. `PicoReaders` switches both antennas off between samples and on exit, and refuses to invent a UID if acquisition fails. Verify the card is still in place across gain and UID reads. Confirm that a lower reported value actually means closer; raw register encodings may differ.
 * `motion.move_relative(right_mm, forward_mm)` is a **blocking**, robot-frame move in millimeters; positive values mean robot-right and robot-forward. It must enforce its own timeout, travel limits and emergency stop, and raise on motion failure. Verify signs and wheel geometry with Task 3. Do not substitute the existing `move_to` without an adapter.
 * `motion.get_pose()` returns `(x_mm, y_mm, heading)`; `motion.set_pose(x_mm, y_mm, heading)` accepts the same heading units. `motion.stop()` must halt motion even after a failed operation.
 
@@ -24,7 +24,7 @@ For a visible detection, the robot can be anywhere in the reader's field; immedi
 ## Bring-up and limitations
 
 1. The supplied reader test configures SPI SCK GP18, MOSI GP19, MISO GP16, reader selects GP20 and GP17, and shared reset GP22. Confirm actual wiring and 3.3 V supply with the team. `PicoReaders` uses those pins and checks the reader version registers.
-2. Implement the missing UID-reading callback and bench-test the reader adapter with motors disconnected. Verify antenna sequencing, UID format, gain ordering, reader identity, and repeatability at known offsets. A tie in discrete gain levels is not proof of millimeter-level centering.
+2. Bench-test the built-in UID implementation and reader adapter with motors disconnected. Verify antenna sequencing, UID format, gain ordering, reader identity, and repeatability at known offsets. A tie in discrete gain levels is not proof of millimeter-level centering.
 3. Agree on coordinates, axis signs, stop behavior, safe speed, timeout and movement resolution with Task 3. Implement the motion adapter. Validate travel limits and emergency stop with wheels raised before floor testing.
 4. Measure detection boundaries across the full 30 mm starting-offset range. The scan needs an initial detection, both readers must detect for lateral alignment, and each edge must be within `max_travel_mm`. Reader field asymmetry, quantized gain, tag orientation and hysteresis can bias the midpoint. Calibrate step size, gain tolerance, and scan direction; a successful return is not a guarantee of accuracy.
 5. Test on foam with a clear area and a person ready to stop the robot. Record errors for multiple cards, headings, and starting offsets up to 30 mm. The handoff's few-millimeter requirement is not demonstrated by the simulated tests.
@@ -34,3 +34,64 @@ The module requires the `RFID` folder on the MicroPython import path. Check supp
 ## PC simulation tests
 
 From the repository root, run `python -m unittest discover -s tests -v`. The tests use a simplified symmetric simulated field, not an RC522 or real motors; they verify control flow and error handling only.
+
+
+## Task 4b: UID selection and fast scans
+
+```python
+from RFID.pico_readers import PicoReaders
+readers = PicoReaders()
+left_uid, right_uid = readers.read_pair_fast()  # bytes or None per reader
+# Gain scan for centering retains its original return shape:
+# ((uid, minimum_gain_db), (uid, minimum_gain_db)), with None for absent readers
+pair = readers.read_pair()
+```
+
+`RFID.uid.read_uid(reader)` uses WUPA, anticollision and SELECT, checks the
+UID BCC and SAK CRC_A, and supports 4-, 7- and 10-byte cascaded UIDs. Returned
+bytes exclude cascade tags, BCC and CRC. No initial reply returns None;
+malformed replies, a card disappearing mid-selection, detected collisions or
+chip errors raise `UIDReadError` (an OSError). SPI errors propagate. This is
+identification only, not card-memory authentication. Detected collisions fail
+closed; this implementation does not enumerate/select among multiple cards.
+
+`read_pair_fast(gain_code=7)` uses fixed receiver gain (default 48 dB), skips
+`lowest_gain`, and returns `(left_uid, right_uid)`. It preserves disagreement;
+assignment/commissioning must require matching stable samples. It never
+silently chooses one reader's UID. Both antennas are off between reads and
+on return or exception, including custom callback failures. The built-in UID
+function controls only its supplied reader; use the pair wrapper to isolate
+the other antenna.
+
+Each chip exchange has an 8 ms software deadline, also honoring the chip timer.
+A missing card is not retried internally. Field reset/settling takes 8 ms per
+reader. Cascaded UIDs require additional exchanges. The under-50-ms pair-read
+aim has **not** been measured; this is not a hard pair latency guarantee.
+These are synchronous calls. The long gain scan is unsuitable inside a motion
+loop that must service stop within 200 ms; cooperative runtime scheduling
+remains a separate integration task. Custom callbacks must provide their own
+bounds. A Python deadline cannot interrupt a blocked SPI driver.
+
+### Motors-disconnected acceptance logging
+
+From the repository root on a Pico, explicitly run:
+
+```python
+from RFID.bench_uid import run
+run(expected_uid="01020304", offset_mm=0, trials=20)
+```
+
+The logger prints CSV rows with trial, manually measured offset, both UIDs,
+match result, elapsed pair-read time and error. It always turns off antennas.
+Repeat at 0, 10, 20 and 30 mm with the intended foam/card orientation and about
+26 mm reader height. Use `gain_scan=True` in separate runs to log minimum gain
+and elapsed scan time. Keep offset and height independent; log actual setup.
+
+Record 20/20 correct reads per reader at the intended operating placement,
+then test a different expected card and nearby competing cards. Errors or
+conflicting UIDs must not be accepted as a tile identity. Record latency
+maximum/typical values, missed reads, gain ordering and card orientations.
+The CSV is an observation record, not proof of centering or physical accuracy.
+No physical results are included in this commit.
+
+Protocol/register reference: [NXP MFRC522 datasheet](https://www.nxp.com/docs/en/data-sheet/MFRC522.pdf).
