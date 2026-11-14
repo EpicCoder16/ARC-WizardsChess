@@ -1,3 +1,10 @@
+> Task 3 update: kiwi kinematics/odometry, heading hold, translation ramps,
+> Task 2 scheduling/stop adapter, RFID-confirmed route callback and a physical
+> acceptance runner are now in `ControlCode/kiwi_drive`. See that README for
+> wiring. Task 2 PR #6 remains draft; hardware calibration, UID acquisition,
+> explicit route/board configuration and physical acceptance are still pending.
+> The original checkpoint notes below describe the Task 1/4/5 bench baseline.
+
 # Task 1, 4, and 5 integration notes
 
 This repository combines the current Task 1 motor driver, Task 4 RFID prototype,

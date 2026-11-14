@@ -40,7 +40,7 @@ def _matvec(matrix, vector):
 class KiwiDrive:
     def __init__(self, wheels, wheel_angles_rad, wheel_radii_mm, max_wheel_speed_mm_s,
                  max_move_mm, speed_mm_s, acceleration_mm_s2, tolerance_mm,
-                 timeout_ms, control_period_ms=20, clock=None):
+                 timeout_ms, control_period_ms=20, clock=None, heading_gain=2.0):
         """All physical parameters are explicit; no robot measurements are assumed.
 
         wheels provides get_wheel_distance(1..3), set_wheel_speed(1..3, mm/s),
@@ -52,13 +52,16 @@ class KiwiDrive:
             raise ValueError('three wheel angles and radii required')
         values = tuple(wheel_angles_rad) + tuple(wheel_radii_mm) + (
             max_wheel_speed_mm_s, max_move_mm, speed_mm_s, acceleration_mm_s2,
-            tolerance_mm, timeout_ms, control_period_ms)
+            tolerance_mm, timeout_ms, control_period_ms, heading_gain)
         if not all(_finite(v) for v in values):
             raise ValueError('all geometry and limits must be finite numbers')
         if any(r <= 0 for r in wheel_radii_mm) or min(max_wheel_speed_mm_s,
                 max_move_mm, speed_mm_s, acceleration_mm_s2, tolerance_mm,
                 timeout_ms, control_period_ms) <= 0:
             raise ValueError('radii and motion limits must be positive')
+        if heading_gain < 0:
+            raise ValueError("heading gain must be nonnegative")
+        self.heading_gain = heading_gain
         self.wheels = wheels
         self.matrix = tuple((-math.sin(a), math.cos(a), r)
                             for a, r in zip(wheel_angles_rad, wheel_radii_mm))
@@ -154,15 +157,16 @@ class KiwiDrive:
         """Blocking feedback move in board coordinates, with bounded duration.
 
         Call only when Task 2 service() is safe to run and robot area is clear.
-        It commands zero rotation; actual heading is tracked but not corrected.
+        It holds the starting heading using encoder feedback.
         """
         if not all(_finite(v) for v in (x_mm, y_mm)):
             raise ValueError('target must be finite')
         start = self.clock.now_ms()
         previous = start
         commanded_speed = 0.0
+        world_vx, world_vy = 0.0, 0.0
         try:
-            x, y, _ = self.get_pose()
+            x, y, start_heading = self.get_pose()
             if math.hypot(x_mm - x, y_mm - y) > self.max_move:
                 raise MotionError('target exceeds configured move limit')
             while True:
@@ -170,7 +174,7 @@ class KiwiDrive:
                 x, y, heading = self.get_pose()
                 dx, dy = x_mm - x, y_mm - y
                 remaining = math.hypot(dx, dy)
-                if remaining <= self.tolerance:
+                if remaining <= self.tolerance and commanded_speed <= 1e-9:
                     return True
                 now = self.clock.now_ms()
                 if self.clock.diff_ms(now, start) >= self.timeout_ms:
@@ -178,14 +182,23 @@ class KiwiDrive:
                 dt = max(0.0, self.clock.diff_ms(now, previous) / 1000.0)
                 previous = now
                 # Brake based on remaining distance and ramp up from zero.
-                wanted = min(self.speed, math.sqrt(2 * self.accel * remaining))
+                wanted = min(self.speed, math.sqrt(2 * self.accel *
+                             max(0.0, remaining - self.tolerance)))
                 change = self.accel * dt
-                commanded_speed = max(commanded_speed - change,
-                                      min(wanted, commanded_speed + change))
-                world_vx, world_vy = commanded_speed * dx / remaining, commanded_speed * dy / remaining
+                if remaining <= self.tolerance:
+                    wanted_x, wanted_y = 0.0, 0.0
+                else:
+                    wanted_x, wanted_y = wanted * dx / remaining, wanted * dy / remaining
+                dvx, dvy = wanted_x - world_vx, wanted_y - world_vy
+                delta = math.hypot(dvx, dvy)
+                fraction = min(1.0, change / delta) if delta else 1.0
+                world_vx += dvx * fraction
+                world_vy += dvy * fraction
+                commanded_speed = math.hypot(world_vx, world_vy)
                 body_vx = math.cos(heading) * world_vx + math.sin(heading) * world_vy
                 body_vy = -math.sin(heading) * world_vx + math.cos(heading) * world_vy
-                self.drive(body_vx, body_vy, 0.0)
+                heading_error = (start_heading - heading + math.pi) % (2 * math.pi) - math.pi
+                self.drive(body_vx, body_vy, self.heading_gain * heading_error)
                 self.clock.sleep_ms(self.period_ms)
         finally:
             self.stop()
